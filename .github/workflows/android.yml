@@ -1,7 +1,7 @@
 
 name: Android build
 
-on:
+"on":
   push:
     branches:
       - main
@@ -28,21 +28,23 @@ jobs:
           java-version: '17'
 
       - name: Install Android SDK components
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install Android platform and build tools
+      - name: Install Android 36 platform and build tools
+        shell: bash
         run: |
-          sdkmanager "platforms;android-36"
-          sdkmanager "build-tools;36.0.0"
-          sdkmanager "platform-tools"
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Verify Gradle version
+        shell: bash
         run: |
+          set -euo pipefail
           chmod +x ./gradlew
-          cat gradle/wrapper/gradle-wrapper.properties
           ./gradlew --version
 
       - name: Run tests and build debug APK
@@ -56,20 +58,30 @@ jobs:
           if-no-files-found: error
 
       - name: Configure release signing
+        shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
+          set -euo pipefail
+
+          if [ -n "${KEYSTORE_B64:-}" ] && \
+             [ -n "${STORE_PASS:-}" ] && \
+             [ -n "${KEY_ALIAS:-}" ] && \
+             [ -n "${KEY_PASS:-}" ]; then
+
             echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/neon-release.jks"
+
             {
-              echo "RELEASE_STORE_FILE=$RUNNER_TEMP/neon-release.jks"
-              echo "RELEASE_STORE_PASSWORD=$STORE_PASS"
-              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
-              echo "RELEASE_KEY_PASSWORD=$KEY_PASS"
+              printf 'RELEASE_STORE_FILE=%s\n' "$RUNNER_TEMP/neon-release.jks"
+              printf 'RELEASE_STORE_PASSWORD=%s\n' "$STORE_PASS"
+              printf 'RELEASE_KEY_ALIAS=%s\n' "$KEY_ALIAS"
+              printf 'RELEASE_KEY_PASSWORD=%s\n' "$KEY_PASS"
             } >> "$GITHUB_ENV"
+
+            echo "Release signing configured."
           else
             echo "Release signing secrets not configured."
           fi
