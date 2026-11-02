@@ -1,115 +1,108 @@
+
 name: Android build
 
-on:
-push:
-branches:
-- main
-- master
-pull_request:
-workflow_dispatch:
+"on":
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-name: Build NEON BLOCKS
-runs-on: ubuntu-latest
+  build:
+    name: Build NEON BLOCKS
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Set up JDK 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - name: Install Android SDK components
-    shell: bash
-    run: |
-      set -e
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -e
 
-      SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
-      if [ -z "$SDK_ROOT" ]; then
-        echo "ERROR: Android SDK not found."
-        exit 1
-      fi
+          if [ -z "$SDK_ROOT" ]; then
+            echo "Android SDK not found"
+            exit 1
+          fi
 
-      echo "Android SDK: $SDK_ROOT"
+          SDKMANAGER="$(command -v sdkmanager || true)"
 
-      SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
+          fi
 
-      if [ -z "$SDKMANAGER" ]; then
-        SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
-      fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found"
+            exit 1
+          fi
 
-      if [ -z "$SDKMANAGER" ]; then
-        echo "ERROR: sdkmanager not found."
-        exit 1
-      fi
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
-      echo "Accepting Android SDK licenses..."
-      yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
 
-      echo "Installing Android SDK packages..."
-      "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
-        "platform-tools" \
-        "platforms;android-36" \
-        "build-tools;36.0.0"
+      - name: Run tests and build APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
 
-  - name: Make Gradle wrapper executable
-    run: chmod +x ./gradlew
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-blocks-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
 
-  - name: Run unit tests and build debug APK
-    run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Configure release signing
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -e
 
-  - name: Upload debug APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: neon-blocks-debug-apk
-      path: app/build/outputs/apk/debug/app-debug.apk
-      if-no-files-found: error
+          if [ -n "${KEYSTORE_B64:-}" ] && \
+             [ -n "${STORE_PASS:-}" ] && \
+             [ -n "${KEY_ALIAS:-}" ] && \
+             [ -n "${KEY_PASS:-}" ]; then
 
-  - name: Configure release signing
-    shell: bash
-    env:
-      KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-      STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-      KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
-    run: |
-      set -e
+            echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/neon-release.jks"
 
-      if [ -n "${KEYSTORE_B64:-}" ] && \
-         [ -n "${STORE_PASS:-}" ] && \
-         [ -n "${KEY_ALIAS:-}" ] && \
-         [ -n "${KEY_PASS:-}" ]; then
+            {
+              echo "RELEASE_STORE_FILE=$RUNNER_TEMP/neon-release.jks"
+              echo "RELEASE_STORE_PASSWORD=$STORE_PASS"
+              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "RELEASE_KEY_PASSWORD=$KEY_PASS"
+            } >> "$GITHUB_ENV"
 
-        echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/neon-release.jks"
+            echo "Signing configured"
+          else
+            echo "Signing secrets not configured"
+          fi
 
-        {
-          echo "RELEASE_STORE_FILE=$RUNNER_TEMP/neon-release.jks"
-          echo "RELEASE_STORE_PASSWORD=$STORE_PASS"
-          echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
-          echo "RELEASE_KEY_PASSWORD=$KEY_PASS"
-        } >> "$GITHUB_ENV"
+      - name: Build release AAB
+        run: ./gradlew --no-daemon bundleRelease
 
-        echo "Release signing configured."
-
-      else
-        echo "Release signing secrets not configured."
-        echo "The release build may be unsigned."
-      fi
-
-  - name: Build release AAB
-    run: ./gradlew --no-daemon bundleRelease
-
-  - name: Upload release AAB
-    uses: actions/upload-artifact@v4
-    with:
-      name: neon-blocks-release-aab
-      path: app/build/outputs/bundle/release/app-release.aab
-      if-no-files-found: error
+      - name: Upload release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-blocks-release-aab
+          path: app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
