@@ -1,7 +1,7 @@
 
 name: Android build
 
-"on":
+on:
   push:
     branches:
       - main
@@ -28,37 +28,24 @@ jobs:
           java-version: '17'
 
       - name: Install Android SDK components
-        shell: bash
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install Android platform and build tools
         run: |
-          set -e
+          sdkmanager "platforms;android-36"
+          sdkmanager "build-tools;36.0.0"
+          sdkmanager "platform-tools"
 
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+      - name: Verify Gradle version
+        run: |
+          chmod +x ./gradlew
+          cat gradle/wrapper/gradle-wrapper.properties
+          ./gradlew --version
 
-          if [ -z "$SDK_ROOT" ]; then
-            echo "Android SDK not found"
-            exit 1
-          fi
-
-          SDKMANAGER="$(command -v sdkmanager || true)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
-          fi
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found"
-            exit 1
-          fi
-
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
-
-      - name: Run tests and build APK
+      - name: Run tests and build debug APK
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
 
       - name: Upload debug APK
@@ -69,32 +56,22 @@ jobs:
           if-no-files-found: error
 
       - name: Configure release signing
-        shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          set -e
-
-          if [ -n "${KEYSTORE_B64:-}" ] && \
-             [ -n "${STORE_PASS:-}" ] && \
-             [ -n "${KEY_ALIAS:-}" ] && \
-             [ -n "${KEY_PASS:-}" ]; then
-
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
             echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/neon-release.jks"
-
             {
               echo "RELEASE_STORE_FILE=$RUNNER_TEMP/neon-release.jks"
               echo "RELEASE_STORE_PASSWORD=$STORE_PASS"
               echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
               echo "RELEASE_KEY_PASSWORD=$KEY_PASS"
             } >> "$GITHUB_ENV"
-
-            echo "Signing configured"
           else
-            echo "Signing secrets not configured"
+            echo "Release signing secrets not configured."
           fi
 
       - name: Build release AAB
